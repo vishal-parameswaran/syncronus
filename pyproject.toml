@@ -1,0 +1,31 @@
+[tool.poetry]
+name        = "syncronus"                # <-- must match the package dir
+version     = "0.1.0"
+description = "Transfer playlists across your favorite music streaming services with ease."
+authors     = ["vishal-parameswaran"]
+license     = "MIT"
+readme      = "README.md"
+repository  = "https://github.com/vishal-parameswaran/syncronus"
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[tool.poetry.dependencies]
+python        = ">=3.10, <4.0"
+streamlit     = "^1.18.0"
+requests      = "^2.28.0"
+python-dotenv = "^0.21.0"
+Pillow        = "=11.2.1"
+dotenv        = "=0.9.9"
+[tool.poetry.scripts]
+syncronus = "syncronus.app:main"   # dotted path to your real entry point
+
+# No [tool.poetry.packages] section needed — Poetry auto‑discovers any
+# package sitting at the repo root whose directory name matches `name`.
+
+[build-system]
+requires      = ["poetry-core>=1.8"]
+build-backend = "poetry.core.masonry.api"
