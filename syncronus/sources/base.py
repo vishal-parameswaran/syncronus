@@ -31,7 +31,7 @@ class BaseClient(ABC):
         pass
 
     @abstractmethod
-    def sync_playlists(self, playlists: List[Playlist]) -> None:
+    def sync_playlists(self, playlists: Playlist) -> None:
         """
         Sync playlists with the platform.
         """

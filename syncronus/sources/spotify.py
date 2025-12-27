@@ -67,29 +67,6 @@ class SpotifyClient(BaseClient):
         # self._ensure_token()
 
     # ------------------------------------------------------------------
-    # AUTHENTICATION
-    # ------------------------------------------------------------------
-    def authenticate(self) -> Optional[str]:
-        """Smart auth helper for UI buttons.
-
-        Returns
-        -------
-        * **``None``** if authentication is already valid (token cached and
-          refreshed).  The caller can proceed with API calls immediately.
-        * **``str``** – a Spotify authorization URL.  The caller should direct
-          the user to this URL to complete the one‑time grant.  After the user
-          authorises and you capture the ``?code`` parameter, call
-          :pymeth:`exchange_code` once – the next :pymeth:`authenticate` call
-          will then return ``None``.
-        """
-        try:
-            self._ensure_token()  # may refresh silently
-            return None
-        except SpotifyAuthError:
-            # no cached credentials – need interactive login
-            return self.generate_auth_url()
-
-    # ------------------------------------------------------------------
     # OAuth helpers
     # ------------------------------------------------------------------
     def generate_auth_url(self, state: str | None = None) -> str:
@@ -125,8 +102,129 @@ class SpotifyClient(BaseClient):
         self._update_tokens(payload)
 
     # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _load_cached_tokens(self) -> None:
+        if self.cache_path.exists():
+            data = json.loads(self.cache_path.read_text())
+            self.refresh_token = data.get("refresh_token")
+            self.access_token = data.get("access_token")
+            self.expires_at = data.get("expires_at", 0.0)
+
+    def _save_cached_tokens(self) -> None:
+        data = {
+            "refresh_token": self.refresh_token,
+            "access_token": self.access_token,
+            "expires_at": self.expires_at,
+        }
+        self.cache_path.write_text(json.dumps(data))
+
+    def _update_tokens(self, payload: Dict[str, Any]) -> None:
+        self.access_token = payload["access_token"]
+        self.expires_at = time.time() + payload["expires_in"] - 60  # margin
+        if "refresh_token" in payload and payload["refresh_token"]:
+            self.refresh_token = payload["refresh_token"]
+        self._save_cached_tokens()
+
+    def _ensure_token(self) -> None:
+        if not self.access_token or time.time() >= self.expires_at:
+            if not self.refresh_token:
+                raise SpotifyAuthError("No refresh token – call `generate_auth_url` then `exchange_code`.")
+            self._refresh_access_token()
+
+    def _refresh_access_token(self) -> None:
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": self.refresh_token,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+        }
+        resp = requests.post(SPOTIFY_TOKEN_URL, data=data, timeout=15)
+        if resp.status_code != 200:
+            raise SpotifyAuthError(f"Failed to refresh token: {resp.text}")
+        self._update_tokens(resp.json())
+
+    def _get_tracks_from_url(self, url: str) -> List[Song]:
+        self._ensure_token()
+        tracks: List[Song] = []
+        resp = self._get(url)
+
+        for item in resp["items"]:
+            try:
+                track = self._song_from_api(item["track"])
+                tracks.append(track)
+            except SpotifySongNotInRegionError:
+                logger.debug("Song is not available in your region.")
+                continue
+            except Exception as e:
+                raise Exception(f"Failed to parse track {item}: {e}")
+        return tracks
+
+    def _song_from_api(item: Dict[str, Any]) -> Song:
+        if item is None:
+            raise SpotifySongNotInRegionError("Song not available in your region.")
+        else:
+            return Song(
+                isrc=item["external_ids"]["isrc"],
+                title=item["name"],
+                artist=[a["name"] for a in item["artists"]],
+                album=item["album"]["name"],
+                duration_ms=item["duration_ms"],
+            )
+
+    def _playlist_from_api(self, item: Dict[str, Any]) -> Playlist:
+        try:
+            return Playlist(
+                id=item["id"],
+                name=item["name"],
+                description=item.get("description", ""),
+                songs=self._get_tracks_from_url(item.get("tracks").get("href")),  # lazily loaded on demand
+                cover_image_path=item.get("images", [])[0].get("url"),
+                url=item["external_urls"].get("spotify"),
+            )
+        except Exception as e:
+            raise Exception(f"Failed to parse playlist {item}: {e}")
+
+    # ------------------------- HTTP wrappers -------------------------
+    def _headers(self) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}", "Content-Type": "application/json"}
+
+    def _get(self, url: str, **kwargs) -> Dict[str, Any]:
+        resp = requests.get(url, headers=self._headers(), timeout=15, **kwargs)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Spotify GET {url} failed: {resp.text}")
+        return resp.json()
+
+    def _post(self, url: str, **kwargs) -> Dict[str, Any]:
+        resp = requests.post(url, headers=self._headers(), timeout=15, **kwargs)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Spotify POST {url} failed: {resp.text}")
+        return resp.json()
+   
+    # ------------------------------------------------------------------
     # Public API (BaseClient overrides)
     # ------------------------------------------------------------------
+
+    def authenticate(self) -> Optional[str]:
+        """Smart auth helper for UI buttons.
+
+        Returns
+        -------
+        * **``None``** if authentication is already valid (token cached and
+          refreshed).  The caller can proceed with API calls immediately.
+        * **``str``** – a Spotify authorization URL.  The caller should direct
+          the user to this URL to complete the one‑time grant.  After the user
+          authorises and you capture the ``?code`` parameter, call
+          :pymeth:`exchange_code` once – the next :pymeth:`authenticate` call
+          will then return ``None``.
+        """
+        try:
+            self._ensure_token()  # may refresh silently
+            return None
+        except SpotifyAuthError:
+            # no cached credentials – need interactive login
+            return self.generate_auth_url()
 
     def get_all_playlists(self) -> List[Playlist]:
         self._ensure_token()
@@ -186,105 +284,3 @@ class SpotifyClient(BaseClient):
         recs = self._get(f"{SPOTIFY_API_BASE}/recommendations", params=params)
         songs = [self._song_from_api(t) for t in recs["tracks"]]
         return self.create_playlist(name, description=description, public=public, songs=songs)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _load_cached_tokens(self) -> None:
-        if self.cache_path.exists():
-            data = json.loads(self.cache_path.read_text())
-            self.refresh_token = data.get("refresh_token")
-            self.access_token = data.get("access_token")
-            self.expires_at = data.get("expires_at", 0.0)
-
-    def _save_cached_tokens(self) -> None:
-        data = {
-            "refresh_token": self.refresh_token,
-            "access_token": self.access_token,
-            "expires_at": self.expires_at,
-        }
-        self.cache_path.write_text(json.dumps(data))
-
-    def _update_tokens(self, payload: Dict[str, Any]) -> None:
-        self.access_token = payload["access_token"]
-        self.expires_at = time.time() + payload["expires_in"] - 60  # margin
-        if "refresh_token" in payload and payload["refresh_token"]:
-            self.refresh_token = payload["refresh_token"]
-        self._save_cached_tokens()
-
-    def _ensure_token(self) -> None:
-        if not self.access_token or time.time() >= self.expires_at:
-            if not self.refresh_token:
-                raise SpotifyAuthError("No refresh token – call `generate_auth_url` then `exchange_code`.")
-            self._refresh_access_token()
-
-    def _refresh_access_token(self) -> None:
-        data = {
-            "grant_type": "refresh_token",
-            "refresh_token": self.refresh_token,
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-        }
-        resp = requests.post(SPOTIFY_TOKEN_URL, data=data, timeout=15)
-        if resp.status_code != 200:
-            raise SpotifyAuthError(f"Failed to refresh token: {resp.text}")
-        self._update_tokens(resp.json())
-
-    # ------------------------- HTTP wrappers -------------------------
-    def _headers(self) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {self.access_token}", "Content-Type": "application/json"}
-
-    def _get(self, url: str, **kwargs) -> Dict[str, Any]:
-        resp = requests.get(url, headers=self._headers(), timeout=15, **kwargs)
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Spotify GET {url} failed: {resp.text}")
-        return resp.json()
-
-    def _post(self, url: str, **kwargs) -> Dict[str, Any]:
-        resp = requests.post(url, headers=self._headers(), timeout=15, **kwargs)
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Spotify POST {url} failed: {resp.text}")
-        return resp.json()
-
-    # ----------------------- Model conversion -----------------------
-    def _get_tracks_from_url(self, url: str) -> List[Song]:
-        self._ensure_token()
-        tracks: List[Song] = []
-        resp = self._get(url)
-
-        for item in resp["items"]:
-            try:
-                track = self._song_from_api(item["track"])
-                tracks.append(track)
-            except SpotifySongNotInRegionError:
-                logger.debug("Song is not available in your region.")
-                continue
-            except Exception as e:
-                raise Exception(f"Failed to parse track {item}: {e}")
-        return tracks
-
-    def _song_from_api(item: Dict[str, Any]) -> Song:
-        if item is None:
-            raise SpotifySongNotInRegionError("Song not available in your region.")
-        else:
-            return Song(
-                isrc=item["external_ids"]["isrc"],
-                title=item["name"],
-                artist=[a["name"] for a in item["artists"]],
-                album=item["album"]["name"],
-                duration_ms=item["duration_ms"],
-            )
-
-    def _playlist_from_api(self, item: Dict[str, Any]) -> Playlist:
-        try:
-            return Playlist(
-                id=item["id"],
-                name=item["name"],
-                description=item.get("description", ""),
-                songs=self._get_tracks_from_url(item.get("tracks").get("href")),  # lazily loaded on demand
-                cover_image_path=item.get("images", [])[0].get("url"),
-                url=item["external_urls"].get("spotify"),
-            )
-        except Exception as e:
-            raise Exception(f"Failed to parse playlist {item}: {e}")
