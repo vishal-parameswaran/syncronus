@@ -487,11 +487,8 @@ class TidalClient(BaseClient):
 
         params = {"data": songs_list, "meta": {"positionBefore": playlist_id}}
 
-        resp = self._post(add_songs_url, json=params)
-        if resp.status_code == 201:
-            logger.info(f"Added {len(songs)} songs to playlist {playlist_id}.")
-        else:
-            raise RuntimeError(f"Failed to add songs to playlist {playlist_id}: {resp.text}")
+        self._post(add_songs_url, json=params)
+        logger.info(f"Added {len(songs)} songs to playlist {playlist_id}.")
 
     # ------------------------------------------------------------------
     # Public API (BaseClient implementation)
