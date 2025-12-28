@@ -26,6 +26,9 @@ syncronus = "syncronus.app:main"   # dotted path to your real entry point
 # No [tool.poetry.packages] section needed — Poetry auto‑discovers any
 # package sitting at the repo root whose directory name matches `name`.
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.2"
+
 [build-system]
 requires      = ["poetry-core>=1.8"]
 build-backend = "poetry.core.masonry.api"
