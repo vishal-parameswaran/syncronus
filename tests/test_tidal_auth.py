@@ -79,12 +79,7 @@ def test_tidal_fetches_user_id_and_country(monkeypatch, tmp_cache):
     # Mock GET for users/me
     def fake_get(url, headers=None, timeout=15, **kwargs):
         assert url.startswith(f"{TIDAL_API_BASE}/users/me")
-        return FakeResponse(200, json_data={
-            "data": {
-                "id": "user-1",
-                "attributes": {"country": "US"}
-            }
-        })
+        return FakeResponse(200, json_data={"data": {"id": "user-1", "attributes": {"country": "US"}}})
 
     monkeypatch.setattr(requests, "get", fake_get)
 

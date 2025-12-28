@@ -3,6 +3,7 @@ import json
 import types
 import pytest
 
+
 class FakeResponse:
     def __init__(self, status_code: int = 200, json_data=None, headers=None, text: str = ""):
         self.status_code = status_code
@@ -17,6 +18,7 @@ class FakeResponse:
         if self.status_code >= 400:
             raise Exception(f"HTTP {self.status_code}: {self.text}")
 
+
 @pytest.fixture
 def tokens_payload():
     return {
@@ -25,6 +27,7 @@ def tokens_payload():
         "expires_in": 3600,
         "token_type": "Bearer",
     }
+
 
 @pytest.fixture
 def tmp_cache(tmp_path):
